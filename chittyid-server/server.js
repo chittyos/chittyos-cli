@@ -8,6 +8,7 @@ import crypto from "crypto";
 import fetch from "node-fetch";
 import { ChittyVRF } from "./lib/vrf.js";
 import { anomalyDetector } from "./lib/anomaly-detector.js";
+import { certificateManager } from "./lib/certificate-manager.js";
 
 const app = express();
 app.use(express.json());
@@ -475,6 +476,220 @@ app.get("/api/v2/security/forensics", validateApiKey, (req, res) => {
   const report = anomalyDetector.getForensicReport(timeRange);
 
   res.json(report);
+});
+
+/**
+ * POST /v1/certificates/issue - Issue a certificate for a package
+ */
+app.post("/v1/certificates/issue", validateApiKey, async (req, res) => {
+  try {
+    const { type, package_name, version, requester, governance_approval } = req.body;
+
+    // Validate required fields
+    if (!type || !package_name || !version) {
+      return res.status(400).json({
+        error_code: "MISSING_REQUIRED_FIELDS",
+        message: "type, package_name, and version are required",
+      });
+    }
+
+    // Only support package certificates for now
+    if (type !== "package") {
+      return res.status(400).json({
+        error_code: "UNSUPPORTED_CERTIFICATE_TYPE",
+        message: "Only 'package' type certificates are currently supported",
+      });
+    }
+
+    // First, mint a ChittyID for this package
+    const contentHash = crypto
+      .createHash("sha256")
+      .update(`${package_name}@${version}`)
+      .digest("hex");
+
+    const drand = await getDrandBeacon();
+
+    const chittyId = generateChittyID({
+      namespace: "DOC", // Package as document
+      type: "I", // Initial
+      contentHash: `sha256:${contentHash}`,
+      drandValue: drand.randomness,
+      drandRound: drand.round,
+    });
+
+    // Store ChittyID
+    const idRecord = {
+      content_hash: `sha256:${contentHash}`,
+      namespace: "DOC",
+      type: "I",
+      metadata: {
+        package_name,
+        version,
+        certificate_type: "package",
+      },
+      created_at: new Date().toISOString(),
+      drand_round: drand.round,
+      api_key: req.apiKey,
+      status: "active",
+    };
+
+    idRegistry.set(chittyId, idRecord);
+
+    // Issue certificate
+    const certificate = certificateManager.issuePackageCertificate({
+      package_name,
+      version,
+      requester: requester || { github_user: "unknown" },
+      governance_approval: governance_approval || null,
+      chitty_id: chittyId,
+    });
+
+    res.json({
+      success: true,
+      cert_id: certificate.cert_id,
+      chitty_id: certificate.chitty_id,
+      fingerprint: certificate.fingerprint,
+      issued_at: certificate.issued_at,
+      expires_at: certificate.expires_at,
+      pem: certificate.pem,
+      public_key: certificate.public_key,
+      private_key: certificate.private_key, // Only returned once
+      serial_number: certificate.serial_number,
+      verify_url: `https://id.chitty.cc/v1/certificates/verify/${certificate.cert_id}`,
+    });
+  } catch (error) {
+    console.error("Certificate issuance error:", error);
+    res.status(500).json({
+      error_code: "CERTIFICATE_ISSUANCE_FAILED",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /v1/certificates/verify/:cert_id - Verify a certificate
+ */
+app.get("/v1/certificates/verify/:cert_id", (req, res) => {
+  try {
+    const { cert_id } = req.params;
+
+    const verification = certificateManager.verifyCertificate(cert_id);
+
+    if (!verification.valid) {
+      return res.status(400).json({
+        valid: false,
+        error: verification.error,
+        details: verification.details || null,
+      });
+    }
+
+    res.json({
+      valid: true,
+      certificate: verification.certificate,
+    });
+  } catch (error) {
+    res.status(500).json({
+      valid: false,
+      error: "VERIFICATION_FAILED",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /v1/certificates/:cert_id - Get certificate details
+ */
+app.get("/v1/certificates/:cert_id", validateApiKey, (req, res) => {
+  try {
+    const { cert_id } = req.params;
+
+    const certificate = certificateManager.getCertificate(cert_id);
+
+    if (!certificate) {
+      return res.status(404).json({
+        error_code: "CERTIFICATE_NOT_FOUND",
+        message: `Certificate ${cert_id} not found`,
+      });
+    }
+
+    // Return public certificate info (no private key)
+    res.json({
+      cert_id: certificate.cert_id,
+      chitty_id: certificate.chitty_id,
+      type: certificate.type,
+      subject: certificate.subject,
+      issuer: certificate.issuer,
+      issued_at: certificate.issued_at,
+      expires_at: certificate.expires_at,
+      fingerprint: certificate.fingerprint,
+      status: certificate.status,
+      pem: certificate.pem,
+      serial_number: certificate.serial_number,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error_code: "RETRIEVAL_FAILED",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /v1/certificates/:cert_id/revoke - Revoke a certificate
+ */
+app.post("/v1/certificates/:cert_id/revoke", validateApiKey, (req, res) => {
+  try {
+    const { cert_id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({
+        error_code: "MISSING_REASON",
+        message: "Revocation reason is required",
+      });
+    }
+
+    const result = certificateManager.revokeCertificate(cert_id, reason);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    if (error.message === "CERTIFICATE_NOT_FOUND") {
+      return res.status(404).json({
+        error_code: "CERTIFICATE_NOT_FOUND",
+        message: `Certificate ${req.params.cert_id} not found`,
+      });
+    }
+
+    res.status(500).json({
+      error_code: "REVOCATION_FAILED",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /v1/certificates/package/:package_name - List certificates for a package
+ */
+app.get("/v1/certificates/package/:package_name", validateApiKey, (req, res) => {
+  try {
+    const { package_name } = req.params;
+
+    const certificates = certificateManager.listPackageCertificates(package_name);
+
+    res.json({
+      package_name,
+      certificates,
+      total: certificates.length,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error_code: "LISTING_FAILED",
+      message: error.message,
+    });
+  }
 });
 
 /**

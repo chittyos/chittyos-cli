@@ -1,0 +1,29 @@
+name = "chittyos-get"
+main = "src/index.ts"
+compatibility_date = "2024-11-17"
+compatibility_flags = ["nodejs_compat"]
+account_id = "0bc21e3a5a9de1a4cc843be9c3e98121"
+
+# Routes - configure via Cloudflare Dashboard or here
+# routes = [
+#   { pattern = "get.chitty.cc/*", zone_name = "chitty.cc" }
+# ]
+
+# Environment variables
+[vars]
+CHITTYID_URL = "https://id.chitty.cc"
+CHITTYAUTH_URL = "https://chittyauth-mcp-121.chittycorp-llc.workers.dev"
+CHITTYREGISTER_URL = "https://register.chitty.cc"
+
+# Secrets (set via: wrangler secret put)
+# CHITTY_SERVICE_TOKEN - Service token for get.chitty.cc itself
+# CHITTY_SERVICE_ID - ChittyID for get.chitty.cc service
+
+# Optional KV namespace for caching onboarded services
+# [[kv_namespaces]]
+# binding = "KV_NAMESPACE"
+# id = "your_kv_namespace_id"
+
+# Workers AI for advanced features (future)
+# [ai]
+# binding = "AI"

@@ -1,0 +1,310 @@
+name: Publish NPM Package (ChittyOS Certified)
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      package_path:
+        description: 'Path to package (e.g., chittyos-executive-mcp)'
+        required: true
+        type: string
+
+env:
+  CHITTY_ID_SERVICE: https://id.chitty.cc
+  CHITTY_API_GATEWAY: https://api.chitty.cc
+  CHITTY_REGISTRY: https://registry.chitty.cc
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Determine package path
+        id: package
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            PACKAGE_PATH="${{ inputs.package_path }}"
+          else
+            # Extract from release tag (e.g., executive-mcp-v1.0.0)
+            PACKAGE_PATH=$(echo "${{ github.event.release.tag_name }}" | sed 's/-v[0-9].*//')
+          fi
+          echo "path=$PACKAGE_PATH" >> $GITHUB_OUTPUT
+          echo "Package path: $PACKAGE_PATH"
+
+      - name: Install dependencies
+        working-directory: ${{ steps.package.outputs.path }}
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ${{ steps.package.outputs.path }}
+        run: npm test --if-present
+
+      - name: Run linting
+        working-directory: ${{ steps.package.outputs.path }}
+        run: npm run lint --if-present
+
+      - name: Build package
+        working-directory: ${{ steps.package.outputs.path }}
+        run: npm run build --if-present
+
+      - name: Extract package metadata
+        id: metadata
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          echo "Package: $PACKAGE_NAME@$PACKAGE_VERSION"
+
+      - name: Request ChittyID Certificate
+        id: cert
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          echo "Requesting certificate from ChittyID service..."
+
+          CERT_RESPONSE=$(curl -s -X POST "${{ env.CHITTY_ID_SERVICE }}/v1/certificates/issue" \
+            -H "Authorization: Bearer ${{ secrets.CHITTY_ID_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: ${{ secrets.CHITTY_API_KEY }}" \
+            -d @- <<EOF
+          {
+            "type": "package",
+            "package_name": "${{ steps.metadata.outputs.name }}",
+            "version": "${{ steps.metadata.outputs.version }}",
+            "requester": {
+              "github_user": "${{ github.actor }}",
+              "workflow_run": "${{ github.run_id }}",
+              "commit": "${{ github.sha }}"
+            },
+            "governance_approval": "${{ github.event.release.html_url || 'workflow_dispatch' }}"
+          }
+          EOF
+          )
+
+          echo "Certificate response received"
+          echo "$CERT_RESPONSE" | jq '.'
+
+          # Extract certificate data
+          CERT_ID=$(echo "$CERT_RESPONSE" | jq -r '.cert_id')
+          CHITTY_ID=$(echo "$CERT_RESPONSE" | jq -r '.chitty_id')
+          FINGERPRINT=$(echo "$CERT_RESPONSE" | jq -r '.fingerprint')
+
+          echo "cert_id=$CERT_ID" >> $GITHUB_OUTPUT
+          echo "chitty_id=$CHITTY_ID" >> $GITHUB_OUTPUT
+          echo "fingerprint=$FINGERPRINT" >> $GITHUB_OUTPUT
+
+          # Save certificate files
+          echo "$CERT_RESPONSE" | jq -r '.pem' > package-cert.pem
+          echo "$CERT_RESPONSE" | jq -r '.private_key' > package-key.pem
+          echo "$CERT_RESPONSE" | jq -r '.public_key' > package-pubkey.pem
+
+      - name: Build and sign tarball
+        id: tarball
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          echo "Creating package tarball..."
+          npm pack
+
+          TARBALL=$(ls *.tgz | head -n 1)
+          echo "Tarball: $TARBALL"
+
+          # Calculate SHA256 hash
+          TARBALL_HASH=$(sha256sum "$TARBALL" | awk '{print $1}')
+          echo "hash=$TARBALL_HASH" >> $GITHUB_OUTPUT
+          echo "name=$TARBALL" >> $GITHUB_OUTPUT
+
+          # Sign the tarball with the private key (simplified - in production use proper signing)
+          echo "$TARBALL_HASH" > "${TARBALL}.sig"
+
+      - name: Record Chronicle Event
+        id: chronicle
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          echo "Recording build event in Chronicle..."
+
+          CHRONICLE_RESPONSE=$(curl -s -X POST "${{ env.CHITTY_API_GATEWAY }}/chronicle/events" \
+            -H "Authorization: Bearer ${{ secrets.CHITTY_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "event_type": "package.build.complete",
+            "package": "${{ steps.metadata.outputs.name }}",
+            "version": "${{ steps.metadata.outputs.version }}",
+            "cert_id": "${{ steps.cert.outputs.cert_id }}",
+            "artifacts": {
+              "tarball_hash": "sha256:${{ steps.tarball.outputs.hash }}",
+              "tarball_name": "${{ steps.tarball.outputs.name }}",
+              "size_bytes": $(stat -f%z "${{ steps.tarball.outputs.name }}"),
+              "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            },
+            "metadata": {
+              "builder": "github-actions",
+              "commit": "${{ github.sha }}",
+              "workflow_run": "${{ github.run_id }}",
+              "actor": "${{ github.actor }}"
+            }
+          }
+          EOF
+          )
+
+          echo "Chronicle response:"
+          echo "$CHRONICLE_RESPONSE" | jq '.'
+
+          EVENT_ID=$(echo "$CHRONICLE_RESPONSE" | jq -r '.event_id')
+          CHRONICLE_URL=$(echo "$CHRONICLE_RESPONSE" | jq -r '.chronicle_url')
+
+          echo "event_id=$EVENT_ID" >> $GITHUB_OUTPUT
+          echo "chronicle_url=$CHRONICLE_URL" >> $GITHUB_OUTPUT
+
+      - name: Upload to Cloudflare R2
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          echo "Uploading tarball to R2..."
+
+          # Install wrangler if not available
+          npm install -g wrangler
+
+          # Configure wrangler (using environment variables)
+          export CLOUDFLARE_API_TOKEN="${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          export CLOUDFLARE_ACCOUNT_ID="${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+
+          # Upload tarball
+          R2_PATH="packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }}.tgz"
+
+          wrangler r2 object put \
+            "chitty-processed-docs/$R2_PATH" \
+            --file="${{ steps.tarball.outputs.name }}" \
+            --content-type="application/gzip"
+
+          # Upload certificate bundle
+          wrangler r2 object put \
+            "chitty-processed-docs/$R2_PATH.cert.pem" \
+            --file="package-cert.pem" \
+            --content-type="text/plain"
+
+          echo "R2 upload complete: $R2_PATH"
+
+      - name: Update package.json with ChittyOS metadata
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          echo "Updating package.json with ChittyOS metadata..."
+
+          node -e "
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+
+          pkg.chittyos = {
+            service_id: 'chittyos.' + pkg.name.replace('@chittyos/', '').replace(/[^a-z0-9]/g, '-'),
+            domain: 'ops',
+            certificate: {
+              cert_id: '${{ steps.cert.outputs.cert_id }}',
+              chitty_id: '${{ steps.cert.outputs.chitty_id }}',
+              fingerprint: '${{ steps.cert.outputs.fingerprint }}',
+              issued_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 365*24*60*60*1000).toISOString(),
+              verify_url: '${{ env.CHITTY_ID_SERVICE }}/v1/certificates/verify/${{ steps.cert.outputs.cert_id }}'
+            },
+            provenance: {
+              chronicle_event: '${{ steps.chronicle.outputs.event_id }}',
+              chronicle_url: '${{ steps.chronicle.outputs.chronicle_url }}',
+              tarball_hash: 'sha256:${{ steps.tarball.outputs.hash }}',
+              r2_storage: 'chitty-processed-docs/packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }}.tgz',
+              registry_url: '${{ env.CHITTY_REGISTRY }}/packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }}'
+            },
+            governance: {
+              approved_by: ['${{ github.actor }}'],
+              approval_date: new Date().toISOString().split('T')[0],
+              approval_url: '${{ github.event.release.html_url || github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              policy_version: 'v1.0'
+            },
+            build: {
+              commit: '${{ github.sha }}',
+              workflow_run: '${{ github.run_id }}',
+              timestamp: new Date().toISOString()
+            }
+          };
+
+          fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          console.log('✓ package.json updated with ChittyOS metadata');
+          "
+
+      - name: Register with ChittyOS Registry
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          echo "Registering package with ChittyOS Registry..."
+
+          REGISTRY_RESPONSE=$(curl -s -X POST "${{ env.CHITTY_REGISTRY }}/registry/api/packages/register" \
+            -H "Authorization: Bearer ${{ secrets.CHITTY_REGISTRY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "package_name": "${{ steps.metadata.outputs.name }}",
+            "version": "${{ steps.metadata.outputs.version }}",
+            "cert_id": "${{ steps.cert.outputs.cert_id }}",
+            "chronicle_event_id": "${{ steps.chronicle.outputs.event_id }}",
+            "r2_location": "chitty-processed-docs/packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }}.tgz",
+            "npm_registry": "https://registry.npmjs.org",
+            "status": "certified",
+            "metadata": {
+              "github_repo": "${{ github.repository }}",
+              "commit": "${{ github.sha }}",
+              "workflow_run": "${{ github.run_id }}"
+            }
+          }
+          EOF
+          )
+
+          echo "Registry response:"
+          echo "$REGISTRY_RESPONSE" | jq '.'
+
+      - name: Publish to NPM
+        working-directory: ${{ steps.package.outputs.path }}
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create deployment summary
+        run: |
+          echo "## 📦 Package Published Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** \`${{ steps.metadata.outputs.name }}@${{ steps.metadata.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔐 ChittyOS Certificate" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cert ID:** \`${{ steps.cert.outputs.cert_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **ChittyID:** \`${{ steps.cert.outputs.chitty_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Fingerprint:** \`${{ steps.cert.outputs.fingerprint }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Verify:** [${{ env.CHITTY_ID_SERVICE }}/v1/certificates/verify/${{ steps.cert.outputs.cert_id }}](${{ env.CHITTY_ID_SERVICE }}/v1/certificates/verify/${{ steps.cert.outputs.cert_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📜 Chronicle Event" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event ID:** \`${{ steps.chronicle.outputs.event_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event URL:** [${{ steps.chronicle.outputs.chronicle_url }}](${{ steps.chronicle.outputs.chronicle_url }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Registry" >> $GITHUB_STEP_SUMMARY
+          echo "- **ChittyOS Registry:** [${{ env.CHITTY_REGISTRY }}/packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }}](${{ env.CHITTY_REGISTRY }}/packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **NPM Registry:** [https://www.npmjs.com/package/${{ steps.metadata.outputs.name }}](https://www.npmjs.com/package/${{ steps.metadata.outputs.name }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🗄️ Storage" >> $GITHUB_STEP_SUMMARY
+          echo "- **R2 Location:** \`chitty-processed-docs/packages/${{ steps.metadata.outputs.name }}/${{ steps.metadata.outputs.version }}.tgz\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tarball Hash:** \`sha256:${{ steps.tarball.outputs.hash }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean up sensitive files
+        if: always()
+        working-directory: ${{ steps.package.outputs.path }}
+        run: |
+          rm -f package-key.pem
+          rm -f package-cert.pem
+          rm -f package-pubkey.pem

@@ -1,0 +1,352 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "ChittyOS Quality API",
+    "version": "1.0.0",
+    "description": "Quality assurance and testing service for ChittyOS ecosystem",
+    "contact": {
+      "name": "ChittyOS Support",
+      "email": "support@chittyos.com",
+      "url": "https://chittyos.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.chitty.cc/quality",
+      "description": "Production server"
+    }
+  ],
+  "paths": {
+    "/tests": {
+      "get": {
+        "summary": "List test suites",
+        "description": "Retrieve a list of quality test suites",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by test status",
+            "schema": {
+              "type": "string",
+              "enum": ["passed", "failed", "running", "pending"]
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "description": "Filter by service name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of test suites",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tests": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TestSuite"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Run test suite",
+        "description": "Execute a quality test suite",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Test execution started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestExecution"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tests/{testId}": {
+      "get": {
+        "summary": "Get test results",
+        "description": "Retrieve results for a specific test execution",
+        "parameters": [
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "description": "Test execution ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Test not found"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Get quality metrics",
+        "description": "Retrieve quality metrics and statistics",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "Time period for metrics",
+            "schema": {
+              "type": "string",
+              "enum": ["hour", "day", "week", "month"],
+              "default": "day"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quality metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityMetrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "OpenAPI specification",
+        "description": "Returns the OpenAPI specification for Quality API",
+        "responses": {
+          "200": {
+            "description": "OpenAPI specification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TestSuite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Test suite identifier"
+          },
+          "name": {
+            "type": "string",
+            "description": "Test suite name"
+          },
+          "service": {
+            "type": "string",
+            "description": "Target service"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed", "running", "pending"]
+          },
+          "lastRun": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "passRate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": ["id", "name", "service", "status"]
+      },
+      "RunTestRequest": {
+        "type": "object",
+        "properties": {
+          "suiteId": {
+            "type": "string",
+            "description": "Test suite to run"
+          },
+          "service": {
+            "type": "string",
+            "description": "Service to test"
+          },
+          "environment": {
+            "type": "string",
+            "enum": ["development", "staging", "production"],
+            "default": "staging"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Test parameters"
+          }
+        },
+        "required": ["suiteId", "service"]
+      },
+      "TestExecution": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "suiteId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "completed", "failed"]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": ["id", "suiteId", "status", "startedAt"]
+      },
+      "TestResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "suiteId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed"]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Test duration in milliseconds"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["passed", "failed", "skipped"]
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": ["id", "suiteId", "status"]
+      },
+      "QualityMetrics": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string"
+          },
+          "totalTests": {
+            "type": "integer"
+          },
+          "passedTests": {
+            "type": "integer"
+          },
+          "failedTests": {
+            "type": "integer"
+          },
+          "passRate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "averageDuration": {
+            "type": "integer",
+            "description": "Average test duration in milliseconds"
+          },
+          "serviceBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "tests": {
+                  "type": "integer"
+                },
+                "passRate": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "required": ["period", "totalTests", "passedTests", "failedTests", "passRate"]
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

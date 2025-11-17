@@ -1,0 +1,72 @@
+name = "chittyos-api-gateway"
+main = "src/router.ts"
+compatibility_date = "2024-09-28"
+compatibility_flags = ["nodejs_compat"]
+account_id = "0bc21e3a5a9de1a4cc843be9c3e98121"
+
+# Note: Routes are configured via Cloudflare Dashboard
+# The api.chitty.cc/* route should point to this worker
+
+# Environment variables for Cloudflare deployment
+[vars]
+CHITTY_ID_SERVICE = "https://id.chitty.cc"
+CHITTYAUTH_URL = "https://chittyauth-mcp-121.chittycorp-llc.workers.dev"
+ENVIRONMENT = "production"
+CLOUDFLARE_ACCOUNT_ID = "0bc21e3a5a9de1a4cc843be9c3e98121"
+
+# KV Namespace for Registry and Chronicle storage
+[[kv_namespaces]]
+binding = "KV_NAMESPACE"
+id = "c242ebbe796d4099b16c96dd687c0229"  # production-REGISTRY_KV
+
+# R2 Bucket for package storage (to be created)
+# [[r2_buckets]]
+# binding = "R2_BUCKET"
+# bucket_name = "chittyos-packages"
+
+# ========================================
+# SECRETS MANAGEMENT via ChittyConnect × 1Password
+# ========================================
+# All secrets should be managed through ChittyConnect and stored in 1Password.
+# Use the following commands to set secrets for production deployment:
+#
+# ChittyAuth Service Token (for service-to-service auth):
+#   wrangler secret put CHITTY_SERVICE_TOKEN
+#   Pattern: op://ChittyOS-Secrets/CHITTY_API_GATEWAY_SERVICE_TOKEN/password
+#
+# Third-party service credentials (managed via ChittyConnect):
+#   wrangler secret put CHITTY_NOTION_TOKEN
+#   wrangler secret put CHITTY_STRIPE_SECRET_KEY
+#   wrangler secret put CHITTY_DOCUSIGN_ACCESS_TOKEN
+#   wrangler secret put CHITTY_BLOCKCHAIN_RPC_URL
+#   wrangler secret put CHITTY_CONTRACT_ADDRESS
+#
+# Legacy credentials (deprecated - use CHITTY_ prefixed versions):
+#   wrangler secret put NOTION_TOKEN
+#   wrangler secret put STRIPE_SECRET_KEY
+#   wrangler secret put DOCUSIGN_ACCESS_TOKEN
+#   wrangler secret put BLOCKCHAIN_RPC_URL
+#
+# 1Password CLI Integration:
+# All secrets follow the pattern: op://ChittyOS-Secrets/CHITTY_{SERVICE}_{CREDENTIAL}/password
+#
+# Example 1Password vault structure:
+# - CHITTY_API_GATEWAY_SERVICE_TOKEN: Service token for ChittyAuth authentication
+# - CHITTY_NOTION_TOKEN: Notion API integration token
+# - CHITTY_STRIPE_SECRET_KEY: Stripe secret key for payment processing
+# - CHITTY_DOCUSIGN_ACCESS_TOKEN: DocuSign API access token
+# - CHITTY_BLOCKCHAIN_RPC_URL: Blockchain RPC endpoint URL
+# - CHITTY_CONTRACT_ADDRESS: Smart contract address for blockchain operations
+#
+# Credential rotation schedule:
+# - Service tokens: 90 days
+# - API keys: 180 days
+# - Passwords: 90 days
+# - Connection strings: As needed
+#
+# To rotate a credential:
+# 1. Generate new credential in 1Password
+# 2. Update Wrangler secret: wrangler secret put CHITTY_{SERVICE}_{CREDENTIAL}
+# 3. Deploy with new secret: wrangler deploy
+# 4. Verify service connectivity
+# 5. Archive old credential in 1Password

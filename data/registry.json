@@ -1400,13 +1400,6 @@
       "resource_type": "kv_namespace"
     },
     {
-      "id": "a3109d9d59fa4e93a12da697a47dacd8",
-      "name": "chittychat-sync-SYNC_CACHE",
-      "created_on": "",
-      "modified_on": "",
-      "resource_type": "kv_namespace"
-    },
-    {
       "id": "ab928b6412e74dc5a3f676294b653e5a",
       "name": "CACHE_KV",
       "created_on": "",
@@ -1628,24 +1621,6 @@
       "resource_type": "durable_object"
     },
     {
-      "id": "cb1fc290a4e44b9587dd5a309931a402",
-      "name": "amy-chittyid-sync_AmySyncDO",
-      "script": "amy-chittyid-sync",
-      "class": "AmySyncDO",
-      "created_on": "",
-      "modified_on": "",
-      "resource_type": "durable_object"
-    },
-    {
-      "id": "c99b5bddef0947c9bdec23852782cab5",
-      "name": "amy-chittyid-sync-production_AmySyncDO",
-      "script": "amy-chittyid-sync-production",
-      "class": "AmySyncDO",
-      "created_on": "",
-      "modified_on": "",
-      "resource_type": "durable_object"
-    },
-    {
       "id": "a5c85b9bc928412f9321d5d0c154b01a",
       "name": "chittyos-swarm-neural_NeuralMeshDurableObject",
       "script": "chittyos-swarm-neural",
@@ -1704,15 +1679,6 @@
       "name": "chittybeacon-prod_HealthMonitor",
       "script": "chittybeacon-prod",
       "class": "HealthMonitor",
-      "created_on": "",
-      "modified_on": "",
-      "resource_type": "durable_object"
-    },
-    {
-      "id": "af0ac358335142a48577a597f1654ed5",
-      "name": "chittychat-sync-production_SyncState",
-      "script": "chittychat-sync-production",
-      "class": "SyncState",
       "created_on": "",
       "modified_on": "",
       "resource_type": "durable_object"

@@ -1,95 +1,111 @@
 /**
- * ChittyOS Ultimate Worker - Service Router
- * Central routing for all ChittyOS services across 73 domains
+ * ChittyOS API Gateway - Service Router
+ * Central routing for Chronicle, Quality, and Registry services
  */
 
-import { platformHandler } from "./services/platform";
-import { bridgeHandler } from "./services/bridge";
-import { consultantHandler } from "./services/consultant";
-import { chainHandler } from "./services/chain";
-import { ctoHandler } from "./services/cto";
-import { legalHandler } from "./services/legal";
-import { financeHandler } from "./services/finance";
-import { propertyHandler } from "./services/property";
-import { evidenceHandler } from "./services/evidence";
-import { booksHandler } from "./services/books";
-import { assetsHandler } from "./services/assets";
-import { mintHandler } from "./services/mint";
+import { chronicleHandler } from "./services/chronicle";
+import { qualityHandler } from "./services/quality";
 import { registryHandler } from "./services/registry";
-import { gatewayHandler } from "./services/gateway";
-import { schemaHandler } from "./services/schema";
-import { canonHandler } from "./services/canon";
-import { chatHandler } from "./services/chat";
-import { complianceHandler } from "./services/compliance";
-import { trustHandler } from "./services/trust";
-import { verifyHandler } from "./services/verify";
-import { syncHandler } from "./services/sync";
-import { casesHandler } from "./services/cases";
-import { documentsHandler } from "./services/documents";
+import { requireAuth, optionalAuth, type AuthContext } from "./middleware/auth";
 
 export interface Env {
-  KV_NAMESPACE: KVNamespace;
-  D1_DATABASE: D1Database;
-  R2_BUCKET: R2Bucket;
-  QUEUE: Queue;
-  DURABLE_OBJECT: DurableObjectNamespace;
-  // API Keys
-  CHITTY_API_KEY: string;
-  NOTION_TOKEN: string;
-  STRIPE_SECRET_KEY: string;
-  DOCUSIGN_ACCESS_TOKEN: string;
-  BLOCKCHAIN_RPC_URL: string;
-  CHITTY_CONTRACT_ADDRESS: string;
+  KV_NAMESPACE?: KVNamespace;
+  D1_DATABASE?: D1Database;
+  R2_BUCKET?: R2Bucket;
+  QUEUE?: Queue;
+  DURABLE_OBJECT?: DurableObjectNamespace;
+
+  // ChittyAuth Integration
+  CHITTYAUTH_URL?: string;
+  CHITTY_SERVICE_TOKEN?: string;
+
+  // ChittyConnect Managed Credentials (via 1Password)
+  CHITTY_API_KEY?: string;
+  CHITTY_NOTION_TOKEN?: string;
+  CHITTY_STRIPE_SECRET_KEY?: string;
+  CHITTY_DOCUSIGN_ACCESS_TOKEN?: string;
+  CHITTY_BLOCKCHAIN_RPC_URL?: string;
+  CHITTY_CONTRACT_ADDRESS?: string;
+
+  // Legacy support (deprecated)
+  NOTION_TOKEN?: string;
+  STRIPE_SECRET_KEY?: string;
+  DOCUSIGN_ACCESS_TOKEN?: string;
+  BLOCKCHAIN_RPC_URL?: string;
 }
 
 export const serviceRoutes = {
-  // Core platform services
-  "/platform": platformHandler,
-  "/bridge": bridgeHandler,
-  "/consultant": consultantHandler,
-  "/chain": chainHandler,
-  "/cto": ctoHandler,
-
-  // Legal and compliance services
-  "/legal": legalHandler,
-  "/cases": casesHandler,
-  "/documents": documentsHandler,
-  "/compliance": complianceHandler,
-  "/evidence": evidenceHandler,
-
-  // Financial services
-  "/finance": financeHandler,
-  "/books": booksHandler,
-  "/mint": mintHandler,
-
-  // Asset and property management
-  "/property": propertyHandler,
-  "/assets": assetsHandler,
+  // Event sourcing and quality services
+  "/chronicle": chronicleHandler,
+  "/quality": qualityHandler,
   "/registry": registryHandler,
-
-  // Infrastructure services
-  "/gateway": gatewayHandler,
-  "/schema": schemaHandler,
-  "/canon": canonHandler,
-
-  // Communication and verification
-  "/chat": chatHandler,
-  "/trust": trustHandler,
-  "/verify": verifyHandler,
-  "/sync": syncHandler,
 
   // Health and monitoring
   "/health": async () => new Response("OK", { status: 200 }),
-  "/status": async (req: Request, env: Env) => {
-    const services = Object.keys(serviceRoutes);
+  "/api/v1/status": async (req: Request, env: Env) => {
     return Response.json({
+      service: "chittyos-api-gateway",
+      chitty_id: env.CHITTY_SERVICE_ID || "not-configured",
       status: "operational",
-      services: services.length,
-      timestamp: new Date().toISOString(),
       version: "1.0.0",
+      timestamp: new Date().toISOString(),
+      authentication: {
+        enabled: true,
+        provider: "ChittyAuth",
+        url: env.CHITTYAUTH_URL || "https://chittyauth-mcp-121.chittycorp-llc.workers.dev",
+      },
+      dependencies: {
+        chronicle: "operational",
+        quality: "operational",
+        registry: "operational",
+        chittyauth: "integrated",
+        chittyconnect: "integrated",
+      },
+      endpoints: [
+        "/health",
+        "/api/v1/status",
+        "/chronicle/*",
+        "/quality/*",
+        "/registry/*",
+      ],
     });
   },
 };
+
+/**
+ * Determine if request requires authentication
+ * Zero-trust approach: All write operations require auth
+ * Public read operations are allowed for transparency
+ */
+function shouldRequireAuth(method: string, pathname: string): boolean {
+  // All write operations require authentication
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+    return true;
+  }
+
+  // Health and status endpoints are public
+  if (pathname === "/health" || pathname === "/api/v1/status") {
+    return false;
+  }
+
+  // OpenAPI specs are public
+  if (pathname.includes("/openapi.json")) {
+    return false;
+  }
+
+  // GET requests to chronicle events are public (transparency)
+  if (method === "GET" && pathname.startsWith("/chronicle/events")) {
+    return false;
+  }
+
+  // GET requests to registry are public (package discovery)
+  if (method === "GET" && pathname.startsWith("/registry/packages")) {
+    return false;
+  }
+
+  // Default to requiring auth for unknown endpoints
+  return true;
+}
 
 // Main worker entry point
 export default {
@@ -100,11 +116,28 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
 
-    // CORS headers for browser requests
+    // CORS headers with origin whitelist (zero-trust approach)
+    const allowedOrigins = [
+      "https://chitty.cc",
+      "https://www.chitty.cc",
+      "https://api.chitty.cc",
+      "https://id.chitty.cc",
+      "https://registry.chitty.cc",
+      "https://mcp.chitty.cc",
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:8080",
+    ];
+
+    const origin = request.headers.get("Origin") || "";
+    const allowOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+
     const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-ChittyID, X-Request-ID",
+      "Access-Control-Allow-Credentials": "true",
+      "Access-Control-Max-Age": "86400",
     };
 
     // Handle preflight requests
@@ -113,18 +146,77 @@ export default {
     }
 
     try {
+      // Root path - return ChittySync stub
+      if (url.pathname === "/" || url.pathname === "") {
+        return new Response(
+          JSON.stringify({
+            service: "ChittySync",
+            message: "ChittySync is currently in development",
+            status: "stub",
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+              ...corsHeaders,
+            },
+          },
+        );
+      }
+
       // Extract service path
       const pathPrefix = "/" + url.pathname.split("/")[1];
 
       // Route to appropriate handler
       const handler = serviceRoutes[pathPrefix];
       if (handler) {
-        const response = await handler(request, env, url.pathname);
+        // Authentication check for protected endpoints
+        let authContext: AuthContext | undefined;
+
+        // Determine if endpoint requires authentication
+        const requiresAuth = shouldRequireAuth(request.method, url.pathname);
+
+        if (requiresAuth) {
+          const authResult = await requireAuth(request, env);
+
+          if (authResult.response) {
+            // Authentication failed, return error response with CORS
+            Object.entries(corsHeaders).forEach(([key, value]) => {
+              authResult.response!.headers.set(key, value);
+            });
+            return authResult.response;
+          }
+
+          authContext = authResult.authContext;
+        } else {
+          // Optional auth for GET requests (provides context but doesn't block)
+          authContext = await optionalAuth(request, env);
+        }
+
+        // Add auth context to request for downstream handlers
+        const requestWithAuth = new Request(request, {
+          headers: new Headers(request.headers),
+        });
+
+        if (authContext?.chittyId) {
+          requestWithAuth.headers.set("X-Authenticated-ChittyID", authContext.chittyId);
+          requestWithAuth.headers.set(
+            "X-Authenticated-Scopes",
+            JSON.stringify(authContext.scopes || []),
+          );
+        }
+
+        const response = await handler(requestWithAuth, env, url.pathname);
 
         // Add CORS headers to response
         Object.entries(corsHeaders).forEach(([key, value]) => {
           response.headers.set(key, value);
         });
+
+        // Add authentication info to response headers (for debugging)
+        if (authContext?.authenticated) {
+          response.headers.set("X-ChittyOS-Authenticated", "true");
+          response.headers.set("X-ChittyOS-Actor", authContext.chittyId || "unknown");
+        }
 
         return response;
       }

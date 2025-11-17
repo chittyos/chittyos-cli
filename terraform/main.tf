@@ -130,7 +130,7 @@ module "chittyos_cloudflare" {
   workers = {
     gateway = {
       name   = "chittyos-gateway"
-      script = file("${path.module}/../chittyos-ultimate-worker/src/router.ts")
+      script = file("${path.module}/../chittyos-api-gateway/src/router.ts")
     }
   }
 }
